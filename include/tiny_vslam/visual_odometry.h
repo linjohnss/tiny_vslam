@@ -14,6 +14,9 @@
 #include "opencv2/imgproc/imgproc.hpp"
 #include "opencv2/video/tracking.hpp"
 
+#include <cv_bridge/cv_bridge.h>
+#include <nav_msgs/Path.h>
+
 #define MAX_NUM_FEAT 5000
 #define MIN_NUM_FEAT 2000
 
@@ -22,6 +25,27 @@
 #define FEATURE_SHI_TOMASI 2
 #define DIRECT_MODE 0
 #define FEATURE_MODE 1
+
+std::mutex mutex_;
+nav_msgs::Path path;
+
+int Mode = 1;
+bool is_init = 0;
+cv_bridge::CvImagePtr detectImage;
+cv::Mat prevImage, currImage;
+std::vector<cv::Point2f> prevFeatures, currFeatures;
+cv::Mat prevDescriptors, currDescriptors;
+cv::Mat E, R, t, R_f, t_f, mask;
+double scale = 1.00;
+std::vector<cv::KeyPoint> keypoints;
+/* Realsense camera metrix */
+// Mat cameraMatrix = (Mat1d(3, 3) << 630.1563720703125, 0.0, 642.2313232421875,
+//                                              0.0, 629.5250854492188,
+//                                              359.1725769042969, 0.0,
+//                                              0.0, 1.0);
+/* KITTI Dataset 00 camera metrix */
+cv::Mat cameraMatrix = (cv::Mat1d(3, 3) << 718.856, 0.0, 607.1928, 0.0, 718.856,
+                        185.2157, 0.0, 0.0, 1.0);
 
 void featureTracking(cv::Mat img_1, cv::Mat img_2,
                      std::vector<cv::Point2f> &points1,
@@ -137,23 +161,59 @@ void findFeatureMatch(const cv::Mat &img_1, const cv::Mat &img_2,
     }
 }
 
-cv::Point2d pixel2cam(const cv::Point2d &p, const cv::Mat &K) {
-    return cv::Point2d
-    (
-        (p.x - K.at<double>(0, 2)) / K.at<double>(0, 0),
-        (p.y - K.at<double>(1, 2)) / K.at<double>(1, 1)
-    );
+void draw_detected_image()
+{
+    for (unsigned int i = 0; i < currFeatures.size(); i++)
+                cv::circle(detectImage->image, currFeatures[i], 3,  cv::Scalar(0, 255, 0), 1, 8, 0);
 }
 
-void create3DPoint(cv::Mat img_depth, std::vector<cv::Point2f> &points1,
-                      std::vector<cv::Point3f> &point3D, cv::Mat cameraMatrix) {
-    point3D.clear();
-    for (cv::Point2d p:points1) {
-        ushort d = img_depth.ptr<unsigned short>(int(p.y))[int(p.x)];
-        if (d == 0)   // bad depth
-            continue;
-        float dd = d / 5000.0;
-        cv::Point2d p1 = pixel2cam(p, cameraMatrix);
-        point3D.push_back(cv::Point3f(p1.x * dd, p1.y * dd, dd));
+void poseEstimation() 
+{
+    if (Mode == DIRECT_MODE) {
+        std::vector<uchar> status;
+        featureDetection(prevImage, prevFeatures, FEATURE_FAST,
+                            prevDescriptors);
+        featureTracking(prevImage, currImage, prevFeatures,
+                        currFeatures, status);
+    } else
+        findFeatureMatch(prevImage, currImage, prevFeatures,
+                            currFeatures);
+    E = cv::findEssentialMat(currFeatures, prevFeatures, cameraMatrix,
+                                cv::RANSAC, 0.999, 1.0, mask);
+    cv::recoverPose(E, currFeatures, prevFeatures, cameraMatrix, R, t,
+                    mask);
+
+    if ((scale > 0.1) && (t.at<double>(2) > t.at<double>(0)) &&
+        (t.at<double>(2) > t.at<double>(1))) {
+        t_f = t_f + scale * (R_f * t);
+        R_f = R * R_f;
     }
+
+    prevImage = currImage.clone();
+    prevFeatures = currFeatures;
+    prevDescriptors = currDescriptors.clone();
+    draw_detected_image();
+}
+
+void initial_pose()
+{
+    prevImage = currImage.clone();
+    R_f = cv::Mat::eye(3, 3, CV_64FC1);
+    t_f = cv::Mat::zeros(3,1, CV_64FC1);
+    is_init = true;
+}
+
+void publishPath(ros::Publisher& publisher)
+{
+    geometry_msgs::PoseStamped pose_stamped;
+    pose_stamped.pose.position.x = t_f.at<double>(2);
+    pose_stamped.pose.position.y = t_f.at<double>(0);
+    // pose_stamped.pose.position.z = t_f.at<double>(2);
+
+    // We don't care about the orientation
+    pose_stamped.pose.orientation.w = 1;
+    pose_stamped.header.stamp = ros::Time::now();
+    pose_stamped.header.frame_id="world";
+    path.poses.push_back(pose_stamped);
+    publisher.publish(path);
 }

@@ -31,7 +31,6 @@ nav_msgs::Path path;
 
 int Mode = 1;
 bool is_init = 0;
-cv_bridge::CvImagePtr detectImage;
 cv::Mat prevImage, currImage;
 std::vector<cv::Point2f> prevFeatures, currFeatures;
 cv::Mat prevDescriptors, currDescriptors;
@@ -161,10 +160,10 @@ void findFeatureMatch(const cv::Mat &img_1, const cv::Mat &img_2,
     }
 }
 
-void draw_detected_image()
+void draw_detected_image(cv::Mat &detectImage)
 {
     for (unsigned int i = 0; i < currFeatures.size(); i++)
-                cv::circle(detectImage->image, currFeatures[i], 3,  cv::Scalar(0, 255, 0), 1, 8, 0);
+                cv::circle(detectImage, currFeatures[i], 3,  cv::Scalar(0, 255, 0), 1, 8, 0);
 }
 
 void poseEstimation() 
@@ -192,7 +191,6 @@ void poseEstimation()
     prevImage = currImage.clone();
     prevFeatures = currFeatures;
     prevDescriptors = currDescriptors.clone();
-    draw_detected_image();
 }
 
 void initial_pose()

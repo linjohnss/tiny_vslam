@@ -6,26 +6,23 @@
 #include "tiny_vslam/visual_odometry.h"
 #include <Eigen/Dense>
 
-
-cv::Mat traj = cv::Mat::zeros(1000, 1000, CV_8UC3);
-char text[100];
 bool image_get = false;
-
-void imageCallback(const sensor_msgs::CompressedImage::ConstPtr &msg) {
-    try {
-        detectImage = cv_bridge::toCvCopy(msg, sensor_msgs::image_encodings::BGR8);
-        cv::cvtColor(detectImage->image, currImage, cv::COLOR_BGR2GRAY);
-        image_get = true;
-    } catch (cv_bridge::Exception &e) {
-        ROS_ERROR("Error.");
-    }
-}
 
 int main(int argc, char **argv) {
     ros::init(argc, argv, "mono_node");
     ros::NodeHandle nh;
     image_transport::ImageTransport it(nh);
-    ros::Subscriber image_subscriber = nh.subscribe("/image_raw0/compressed", 5, imageCallback);
+    bool is_image_compressed = true;
+    image_transport::TransportHints hints(is_image_compressed ? "compressed" : "raw");
+    cv_bridge::CvImagePtr detectImage;
+
+    auto imageCallback = [&detectImage](const sensor_msgs::ImageConstPtr& msg) -> void {
+        detectImage = cv_bridge::toCvCopy(msg, sensor_msgs::image_encodings::BGR8);
+        cv::cvtColor(detectImage->image, currImage, cv::COLOR_BGR2GRAY);
+        image_get = true;
+    };
+
+    image_transport::Subscriber image_subscriber = it.subscribe("/image_raw0", 5, imageCallback, ros::VoidPtr(), hints);
     image_transport::Publisher image_publisher = it.advertise("tiny/detected_image", 1);
 
     ros::Publisher vslam_path_publisher = nh.advertise<nav_msgs::Path>("tiny/vslam_path", 1);
@@ -39,6 +36,7 @@ int main(int argc, char **argv) {
                 initial_pose();
             } else {
                 poseEstimation();
+                draw_detected_image(detectImage->image);
                 image_publisher.publish(detectImage->toImageMsg());
                 publishPath(vslam_path_publisher);
             }

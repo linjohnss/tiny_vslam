@@ -1,21 +1,8 @@
-#include <ctype.h>
-
-#include <algorithm>  // for copy
-#include <cstddef>
-#include <iostream>
-#include <iterator>  // for ostream_iterator
-#include <sstream>
-#include <string>
-#include <vector>
-
 #include "opencv2/calib3d/calib3d.hpp"
-#include "opencv2/features2d/features2d.hpp"
-#include "opencv2/highgui/highgui.hpp"
-#include "opencv2/imgproc/imgproc.hpp"
 #include "opencv2/video/tracking.hpp"
-
 #include <cv_bridge/cv_bridge.h>
 #include <nav_msgs/Path.h>
+#include <Eigen/Dense>
 
 #define MAX_NUM_FEAT 5000
 #define MIN_NUM_FEAT 2000
@@ -26,10 +13,9 @@
 #define DIRECT_MODE 0
 #define FEATURE_MODE 1
 
-std::mutex mutex_;
 nav_msgs::Path path;
 
-int Mode = 1;
+int Mode = 0;
 bool is_init = 0;
 cv::Mat prevImage, currImage;
 std::vector<cv::Point2f> prevFeatures, currFeatures;
@@ -38,23 +24,22 @@ cv::Mat E, R, t, R_f, t_f, mask;
 double scale = 1.00;
 std::vector<cv::KeyPoint> keypoints;
 /* Realsense camera metrix */
-// Mat cameraMatrix = (Mat1d(3, 3) << 630.1563720703125, 0.0, 642.2313232421875,
-//                                              0.0, 629.5250854492188,
-//                                              359.1725769042969, 0.0,
-//                                              0.0, 1.0);
-/* KITTI Dataset 00 camera metrix */
-cv::Mat cameraMatrix = (cv::Mat1d(3, 3) << 718.856, 0.0, 607.1928, 0.0, 718.856,
-                        185.2157, 0.0, 0.0, 1.0);
+// cv::Mat cameraMatrix = (cv::Mat1d(3, 3) << 632.9028930664062, 0.0, 642.2313232421875,
+//                                             0.0, 632.2689208984375, 359.1725769042969,
+//                                             0.0, 0.0, 1.0);
 
-void featureTracking(cv::Mat img_1, cv::Mat img_2,
-                     std::vector<cv::Point2f> &points1,
-                     std::vector<cv::Point2f> &points2,
-                     std::vector<uchar> &status) {
+/* KITTI Dataset 00 camera metrix */
+cv::Mat cameraMatrix = (cv::Mat1d(3, 3) << 718.856, 0.0, 607.1928,
+                                            0.0, 718.856, 185.2157,
+                                            0.0, 0.0, 1.0);
+
+void featureTracking(cv::Mat img_1, cv::Mat img_2, std::vector<cv::Point2f> &points1, 
+                        std::vector<cv::Point2f> &points2, std::vector<uchar> &status) 
+{
     std::vector<float> err;
     cv::Size winSize = cv::Size(40, 40);
     cv::Size SPwinSize = cv::Size(3, 3);  // search window size=(2*n+1,2*n+1)
-    cv::Size zeroZone =
-        cv::Size(1, 1);  // dead_zone size in centre=(2*n+1,2*n+1)
+    cv::Size zeroZone = cv::Size(1, 1);  // dead_zone size in centre=(2*n+1,2*n+1)
     cv::TermCriteria SPcriteria = cv::TermCriteria(
         cv::TermCriteria::COUNT + cv::TermCriteria::EPS, 30, 0.01);
     cv::cornerSubPix(img_1, points1, SPwinSize, zeroZone, SPcriteria);
@@ -77,20 +62,15 @@ void featureTracking(cv::Mat img_1, cv::Mat img_2,
     }
 }
 
-void featureDetection(cv::Mat img, std::vector<cv::Point2f> &points,
-                      int feature, cv::Mat &descriptors) {
+void featureDetection(cv::Mat img, std::vector<cv::Point2f> &points, int feature)
+{
     // Mat descriptors;
     std::vector<cv::KeyPoint> keypoints;
     if (feature == FEATURE_FAST) {
         // FAST algorithm
-        int fast_threshold = 50;
+        int fast_threshold = 30;
         bool nonmaxSuppression = true;
         cv::FAST(img, keypoints, fast_threshold, nonmaxSuppression);
-        cv::KeyPoint::convert(keypoints, points, std::vector<int>());
-    } else if (feature == FEATURE_ORB) {
-        // ORB algorithm
-        cv::Ptr<cv::Feature2D> orb = cv::ORB::create(MAX_NUM_FEAT);
-        orb->detectAndCompute(img, cv::Mat(), keypoints, descriptors);
         cv::KeyPoint::convert(keypoints, points, std::vector<int>());
     } else if (feature == FEATURE_SHI_TOMASI) {
         // Shi-Tomasi algorithm
@@ -100,23 +80,34 @@ void featureDetection(cv::Mat img, std::vector<cv::Point2f> &points,
 
 void findFeatureMatch(const cv::Mat img_1, const cv::Mat img_2,
                       std::vector<cv::Point2f> &points1,
-                      std::vector<cv::Point2f> &points2) {
+                      std::vector<cv::Point2f> &points2)
+{
     cv::Ptr<cv::ORB> orb = cv::ORB::create(MAX_NUM_FEAT);
     cv::Mat descriptors_1, descriptors_2;
     std::vector<cv::KeyPoint> keypoints_1, keypoints_2;
     cv::Ptr<cv::DescriptorMatcher> matcher = cv::BFMatcher::create(cv::NORM_HAMMING);
     orb->detectAndCompute(img_1, cv::Mat(), keypoints_1, descriptors_1);
     orb->detectAndCompute(img_2, cv::Mat(), keypoints_2, descriptors_2);
+    if (descriptors_1.empty() || descriptors_2.empty()) {
+        points1.clear();
+        points2.clear();
+        return;
+    }
+
     std::vector<cv::DMatch> matches;
-    matcher->match(descriptors_1, descriptors_2, matches);
+    try {
+        matcher->match(descriptors_1, descriptors_2, matches);
+    }
+    catch(const std::exception& e) {
+        std::cerr << e.what() << '\n';
+    }
     double minDist = 10000, maxDist = 0;
     for (int i = 0; i < descriptors_1.rows; i++) {
         double dist = matches[i].distance;
         if (dist < minDist) minDist = dist;
         if (dist > maxDist) maxDist = dist;
     }
-    printf("-- Max dist : %f \n", maxDist);
-    printf("-- Min dist : %f \n", minDist);
+
     points1.clear();
     points2.clear();
     for (int i = 0; i < descriptors_1.rows; i++) {
@@ -127,66 +118,41 @@ void findFeatureMatch(const cv::Mat img_1, const cv::Mat img_2,
     }
 }
 
-void findFeatureMatch(const cv::Mat &img_1, const cv::Mat &img_2,
-                          std::vector<cv::KeyPoint> &keypoints_1,
-                          std::vector<cv::KeyPoint> &keypoints_2,
-                          std::vector<cv::DMatch> &matches) {
-    cv::Ptr<cv::ORB> orb = cv::ORB::create(MAX_NUM_FEAT);
-    cv::Mat descriptors_1, descriptors_2;
-    cv::Ptr<cv::DescriptorMatcher> matcher = cv::BFMatcher::create(cv::NORM_HAMMING);
-    orb->detectAndCompute(img_1, cv::Mat(), keypoints_1, descriptors_1);
-    orb->detectAndCompute(img_2, cv::Mat(), keypoints_2, descriptors_2);
-    std::vector<cv::DMatch> match;
-    matcher->match(descriptors_1, descriptors_2, match);
-
-    double min_dist = 10000, max_dist = 0;
-
-    for (int i = 0; i < descriptors_1.rows; i++) {
-        double dist = match[i].distance;
-        if (dist < min_dist) min_dist = dist;
-        if (dist > max_dist) max_dist = dist;
-    }
-
-    printf("-- Max dist : %f \n", max_dist);
-    printf("-- Min dist : %f \n", min_dist);
-    for (int i = 0; i < descriptors_1.rows; i++) {
-        if (match[i].distance <= std::max(2 * min_dist, 30.0)) {
-            matches.push_back(match[i]);
-        }
-    }
-}
-
 void draw_detected_image(cv::Mat &detectImage)
 {
     for (unsigned int i = 0; i < currFeatures.size(); i++)
-                cv::circle(detectImage, currFeatures[i], 3,  cv::Scalar(0, 255, 0), 1, 8, 0);
+                cv::circle(detectImage, currFeatures[i], 3, cv::Scalar(0, 255, 0), 1, 8, 0);
 }
 
-void poseEstimation() 
+bool poseEstimation() 
 {
-    if (Mode == FEATURE_MODE) {
+    bool successed = true;
+    if (Mode == DIRECT_MODE) {
         std::vector<uchar> status;
-        featureDetection(prevImage, prevFeatures, FEATURE_FAST,
-                            prevDescriptors);
-        featureTracking(prevImage, currImage, prevFeatures,
-                        currFeatures, status);
+        featureDetection(prevImage, prevFeatures, FEATURE_FAST);
+        if (prevFeatures.size() > 100) {
+            featureTracking(prevImage, currImage, prevFeatures, currFeatures, status);
+        }
     } else
-        findFeatureMatch(prevImage, currImage, prevFeatures,
-                            currFeatures);
+        findFeatureMatch(prevImage, currImage, prevFeatures, currFeatures);
+    if (currFeatures.size() < 200 || prevFeatures.size() < 200) {
+        is_init = false;
+        return false;
+    }
     E = cv::findEssentialMat(currFeatures, prevFeatures, cameraMatrix,
                                 cv::RANSAC, 0.999, 1.0, mask);
-    cv::recoverPose(E, currFeatures, prevFeatures, cameraMatrix, R, t,
-                    mask);
-
+    cv::recoverPose(E, currFeatures, prevFeatures, cameraMatrix, R, t, mask);
     if ((scale > 0.1) && (t.at<double>(2) > t.at<double>(0)) &&
         (t.at<double>(2) > t.at<double>(1))) {
         t_f = t_f + scale * (R_f * t);
         R_f = R * R_f;
     }
-
+    
     prevImage = currImage.clone();
     prevFeatures = currFeatures;
     prevDescriptors = currDescriptors.clone();
+    
+    return true;
 }
 
 void initial_pose()

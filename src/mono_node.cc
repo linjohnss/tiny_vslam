@@ -1,10 +1,6 @@
 #include <ros/ros.h>
 #include <image_transport/image_transport.h>
-
-#include <opencv2/highgui/highgui.hpp>
-
 #include "tiny_vslam/visual_odometry.h"
-#include <Eigen/Dense>
 
 bool image_get = false;
 
@@ -22,7 +18,7 @@ int main(int argc, char **argv) {
         image_get = true;
     };
 
-    image_transport::Subscriber image_subscriber = it.subscribe("/image_raw0", 5, imageCallback, ros::VoidPtr(), hints);
+    image_transport::Subscriber image_subscriber = it.subscribe("/camera/color/image_raw", 5, imageCallback, ros::VoidPtr(), hints);
     image_transport::Publisher image_publisher = it.advertise("tiny/detected_image", 1);
 
     ros::Publisher vslam_path_publisher = nh.advertise<nav_msgs::Path>("tiny/vslam_path", 1);
@@ -34,12 +30,13 @@ int main(int argc, char **argv) {
         if (image_get) {
             if (!is_init) {
                 initial_pose();
-            } else {
-                poseEstimation();
+            } else if(poseEstimation()) {
                 draw_detected_image(detectImage->image);
                 image_publisher.publish(detectImage->toImageMsg());
                 publishPath(vslam_path_publisher);
             }
+            else
+                ROS_WARN("Lose track!");
             image_get = false;
         }
         ros::spinOnce();

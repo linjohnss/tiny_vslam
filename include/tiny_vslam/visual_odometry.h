@@ -83,7 +83,7 @@ void featureDetection(cv::Mat img, std::vector<cv::Point2f> &points,
     std::vector<cv::KeyPoint> keypoints;
     if (feature == FEATURE_FAST) {
         // FAST algorithm
-        int fast_threshold = 20;
+        int fast_threshold = 50;
         bool nonmaxSuppression = true;
         cv::FAST(img, keypoints, fast_threshold, nonmaxSuppression);
         cv::KeyPoint::convert(keypoints, points, std::vector<int>());
@@ -117,14 +117,10 @@ void findFeatureMatch(const cv::Mat img_1, const cv::Mat img_2,
     }
     printf("-- Max dist : %f \n", maxDist);
     printf("-- Min dist : %f \n", minDist);
-    // std::vector<cv::DMatch> goodmatches;
-    // std::vector<cv::Point2f> pt_1, pt_2;
     points1.clear();
     points2.clear();
-    // goodmatches.empty();
     for (int i = 0; i < descriptors_1.rows; i++) {
         if (matches[i].distance <= std::max(2 * minDist, 30.0)) {
-            // goodmatches.push_back(matches[i]);
             points1.push_back(keypoints_1[matches[i].queryIdx].pt);
             points2.push_back(keypoints_2[matches[i].trainIdx].pt);
         }
@@ -168,7 +164,7 @@ void draw_detected_image(cv::Mat &detectImage)
 
 void poseEstimation() 
 {
-    if (Mode == DIRECT_MODE) {
+    if (Mode == FEATURE_MODE) {
         std::vector<uchar> status;
         featureDetection(prevImage, prevFeatures, FEATURE_FAST,
                             prevDescriptors);

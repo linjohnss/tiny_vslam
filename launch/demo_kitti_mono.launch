@@ -1,0 +1,14 @@
+<launch>
+    <arg name="open_rviz" default="true"/>
+    <arg name = "rosbag_file" value = "$(find tiny_vslam)/kitti_00_stereo.bag" />
+
+    <node name="mono_node" pkg="tiny_vslam" type="mono_node" output="screen"/>
+
+    <param name="/use_sim_time" value="true"/>
+    <node name="player" pkg="rosbag" type="play" args="--clock -r 1.0 $(arg rosbag_file)" cwd="node" required="true" />
+
+    <!-- rviz -->
+    <group if="$(arg open_rviz)"> 
+        <node pkg="rviz" type="rviz" name="rviz" required="true" args="-d $(find tiny_vslam)/rviz/rviz.rviz"/>
+    </group>
+</launch>   

@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.0.2)
 project(tiny_vslam)
-find_package( OpenCV 3.0 REQUIRED )
+find_package( OpenCV REQUIRED )
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 find_package(Eigen3 REQUIRED)
 include_directories(${EIGEN3_INCLUDE_DIRS})

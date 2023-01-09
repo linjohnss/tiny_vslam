@@ -1,8 +1,12 @@
 #include "opencv2/calib3d/calib3d.hpp"
 #include "opencv2/video/tracking.hpp"
+#include "opencv2/optflow/motempl.hpp"
+#include "opencv2/highgui/highgui.hpp"
+
 #include <cv_bridge/cv_bridge.h>
-#include <nav_msgs/Path.h>
-#include <Eigen/Dense>
+#include <Eigen/Core>
+#include <Eigen/Geometry>
+// #include <time.h>
 
 #define MAX_NUM_FEAT 5000
 #define MIN_NUM_FEAT 2000
@@ -13,15 +17,15 @@
 #define DIRECT_MODE 0
 #define FEATURE_MODE 1
 
-nav_msgs::Path path;
-
-int Mode = 0;
+int Mode = 1;
 bool is_init = 0;
 cv::Mat prevImage, currImage;
 std::vector<cv::Point2f> prevFeatures, currFeatures;
 cv::Mat prevDescriptors, currDescriptors;
-cv::Mat E, R, t, R_f, t_f, mask;
-double scale = 1.00;
+cv::Mat E, R, t, mask;
+Eigen::Matrix3d R_f;
+Eigen::Vector3d t_f;
+double scale = 0.20;
 std::vector<cv::KeyPoint> keypoints;
 /* Realsense camera metrix */
 // cv::Mat cameraMatrix = (cv::Mat1d(3, 3) << 632.9028930664062, 0.0, 642.2313232421875,
@@ -32,6 +36,16 @@ std::vector<cv::KeyPoint> keypoints;
 cv::Mat cameraMatrix = (cv::Mat1d(3, 3) << 718.856, 0.0, 607.1928,
                                             0.0, 718.856, 185.2157,
                                             0.0, 0.0, 1.0);
+
+static void cal_diff()
+{
+    cv::Mat silf;
+    cv::absdiff(prevImage, currImage, silf);
+    cv::threshold(silf, silf, 100, 255, cv::THRESH_BINARY);
+    cv::imshow("Img", silf);
+    cv::waitKey(1);
+}
+
 
 void featureTracking(cv::Mat img_1, cv::Mat img_2, std::vector<cv::Point2f> &points1, 
                         std::vector<cv::Point2f> &points2, std::vector<uchar> &status) 
@@ -121,10 +135,10 @@ void findFeatureMatch(const cv::Mat img_1, const cv::Mat img_2,
 void draw_detected_image(cv::Mat &detectImage)
 {
     for (unsigned int i = 0; i < currFeatures.size(); i++)
-                cv::circle(detectImage, currFeatures[i], 3, cv::Scalar(0, 255, 0), 1, 8, 0);
+        cv::circle(detectImage, currFeatures[i], 3, cv::Scalar(0, 255, 0), 1, 8, 0);
 }
 
-bool poseEstimation() 
+bool poseEstimation(Eigen::Matrix3d &R_output, Eigen::Vector3d &t_output) 
 {
     bool successed = true;
     if (Mode == DIRECT_MODE) {
@@ -139,41 +153,30 @@ bool poseEstimation()
         is_init = false;
         return false;
     }
+    cal_diff();
     E = cv::findEssentialMat(currFeatures, prevFeatures, cameraMatrix,
                                 cv::RANSAC, 0.999, 1.0, mask);
     cv::recoverPose(E, currFeatures, prevFeatures, cameraMatrix, R, t, mask);
     if ((scale > 0.1) && (t.at<double>(2) > t.at<double>(0)) &&
         (t.at<double>(2) > t.at<double>(1))) {
-        t_f = t_f + scale * (R_f * t);
-        R_f = R * R_f;
+        Eigen::Map<Eigen::Matrix3d> eigenR(R.ptr<double>(), R.rows, R.cols);
+        Eigen::Map<Eigen::Vector3d> eigenT(t.ptr<double>(), t.rows, t.cols);
+        t_f = t_f + scale * (R_f * eigenT);
+        R_f = eigenR * R_f;
     }
     
     prevImage = currImage.clone();
     prevFeatures = currFeatures;
     prevDescriptors = currDescriptors.clone();
-    
+    R_output = R_f;
+    t_output = t_f;
     return true;
 }
 
 void initial_pose()
 {
     prevImage = currImage.clone();
-    R_f = cv::Mat::eye(3, 3, CV_64FC1);
-    t_f = cv::Mat::zeros(3,1, CV_64FC1);
+    R_f = Eigen::Matrix3d::Identity();
+    t_f = Eigen::Vector3d::Zero();
     is_init = true;
-}
-
-void publishPath(ros::Publisher& publisher)
-{
-    geometry_msgs::PoseStamped pose_stamped;
-    pose_stamped.pose.position.x = t_f.at<double>(2);
-    pose_stamped.pose.position.y = t_f.at<double>(0);
-    // pose_stamped.pose.position.z = t_f.at<double>(2);
-
-    // We don't care about the orientation
-    pose_stamped.pose.orientation.w = 1;
-    pose_stamped.header.stamp = ros::Time::now();
-    pose_stamped.header.frame_id="world";
-    path.poses.push_back(pose_stamped);
-    publisher.publish(path);
 }
